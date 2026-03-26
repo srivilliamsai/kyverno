@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -14,21 +15,25 @@ import (
 	"github.com/kyverno/kyverno/pkg/clients/dclient"
 	eval "github.com/kyverno/kyverno/pkg/image/verification/evaluator"
 	admissionutils "github.com/kyverno/kyverno/pkg/utils/admission"
+	"github.com/kyverno/kyverno/pkg/event"
 	policyvalidate "github.com/kyverno/kyverno/pkg/validation/policy"
 	"github.com/kyverno/kyverno/pkg/webhooks/handlers"
+	corev1 "k8s.io/api/core/v1"
 )
 
 type policyHandlers struct {
 	client                       dclient.Interface
 	backgroundServiceAccountName string
 	reportsServiceAccountName    string
+	eventGen                     event.Interface
 }
 
-func NewHandlers(client dclient.Interface, backgroundSA, reportsSA string) *policyHandlers {
+func NewHandlers(client dclient.Interface, backgroundSA, reportsSA string, eventGen event.Interface) *policyHandlers {
 	return &policyHandlers{
 		client:                       client,
 		backgroundServiceAccountName: backgroundSA,
 		reportsServiceAccountName:    reportsSA,
+		eventGen:                     eventGen,
 	}
 }
 
@@ -88,6 +93,23 @@ func (h *policyHandlers) Validate(ctx context.Context, logger logr.Logger, reque
 		warnings, err := policyvalidate.Validate(policy.AsKyvernoPolicy(), old, h.client, false, h.backgroundServiceAccountName, h.reportsServiceAccountName)
 		if err != nil {
 			logger.Error(err, "policy validation errors")
+		}
+		for _, w := range warnings {
+			if strings.Contains(w, "matches all kinds with wildcard '*'") {
+				h.eventGen.Add(event.Info{
+					Regarding: corev1.ObjectReference{
+						Kind:       policy.GetKind(),
+						Name:       policy.GetName(),
+						Namespace:  policy.GetNamespace(),
+						UID:        policy.GetUID(),
+						APIVersion: policy.GetAPIVersion(),
+					},
+					Reason:  event.PolicyError,
+					Message: w,
+					Source:  event.AdmissionController,
+					Action:  event.ResourcePassed,
+				})
+			}
 		}
 		return admissionutils.Response(request.UID, err, warnings...)
 	}

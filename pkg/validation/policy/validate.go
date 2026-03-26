@@ -141,6 +141,7 @@ func Validate(policy, oldPolicy kyvernov1.PolicyInterface, client dclient.Interf
 	}
 
 	warnings = append(warnings, checkValidationFailureAction(spec.ValidationFailureAction, spec.ValidationFailureActionOverrides)...)
+	warnings = append(warnings, validateWildcards(policy)...)
 	for _, rule := range spec.Rules {
 		if rule.HasValidate() {
 			if rule.Validation.FailureAction != nil {
